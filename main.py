@@ -17,6 +17,9 @@ from pytorch_lightning.plugins import DDPPlugin
 from lvdm.utils.common_utils import instantiate_from_config, str2bool
 from lvdm.utils.log import set_ptl_logger
 
+import warnings
+warnings.filterwarnings('ignore')
+
 # if int((pl.__version__).split('.')[1])>=7:
 #     from pytorch_lightning.strategies import DDPStrategy,DDPShardedStrategy
 # else:
@@ -98,7 +101,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
     def prepare_data(self):
         pass
 
-    def setup(self):
+    def setup(self, stage=None):
         self.datasets = dict(
             (k, instantiate_from_config(self.dataset_configs[k]))
             for k in self.dataset_configs)

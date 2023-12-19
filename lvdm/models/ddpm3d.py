@@ -1,3 +1,4 @@
+# Code is developed by Satya Dewangan; LinkedIn: https://www.linkedin.com/in/satyadewangan/
 import os
 import time
 import random
@@ -21,6 +22,7 @@ from lvdm.models.modules.util import make_beta_schedule, extract_into_tensor, no
 from lvdm.samplers.ddim import DDIMSampler
 from lvdm.utils.common_utils import exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config, check_istarget
 from lvdm.utils.saving_utils import log_txt_as_img
+from lvdm.models.modules.ip_resampler import ImageProjModel, Resampler
 
 def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode
@@ -89,6 +91,7 @@ class DDPM(pl.LightningModule):
         self.log_every_t = log_every_t
         self.first_stage_key = first_stage_key
         self.image_size = image_size  # try conv?
+        self.resume_new_epoch = 0
         
         if isinstance(self.image_size, int):
             self.image_size = [self.image_size, self.image_size]
@@ -476,6 +479,9 @@ class LatentDiffusion(DDPM):
     def __init__(self,
                  first_stage_config,
                  cond_stage_config,
+                # ------ New Lines -----
+                cond_img_config, finegrained=False, random_cond=False,
+                # -- End of New Lines --
                  cond_stage_key="image",
                  cond_stage_trainable=False,
                  concat_mode=True,
@@ -528,6 +534,14 @@ class LatentDiffusion(DDPM):
         self.downfactor_t = downfactor_t
         self.clip_length = clip_length
         self.latent_frame_strde = latent_frame_strde
+
+        # ---------------- New Lines ------------------
+        self.random_cond = random_cond
+        self.instantiate_img_embedder(cond_img_config, freeze=True)
+        num_tokens = 16 if finegrained else 4
+        self.image_proj_model = self.init_projector(use_finegrained=finegrained, num_tokens=num_tokens, input_dim=1024,\
+                                            cross_attention_dim=1024, dim=1280)  
+        # ------------ End of New Lines ---------------
         
     @rank_zero_only
     @torch.no_grad()
@@ -615,7 +629,10 @@ class LatentDiffusion(DDPM):
             # get condition batch of different condition type
             if cond_key != self.first_stage_key:
                 if cond_key in ['caption', 'txt']:
-                    xc = batch[cond_key]
+                    try:
+                        xc = batch[cond_key]
+                    except:
+                        xc = ['good quality video']*x.shape[0]
                 elif cond_key == 'class_label':
                     xc = batch
                 else:
@@ -667,7 +684,19 @@ class LatentDiffusion(DDPM):
             z = z[:, :, ::4, :, :]
             assert(z.shape[2] == self.temporal_length), f'z={z.shape}, self.temporal_length={self.temporal_length}'
         
-        c, xc = self.get_condition(batch, x, bs, force_c_encode, k, cond_key)
+        # ------ Old Conditions ------
+        # c, xc = self.get_condition(batch, x, bs, force_c_encode, k, cond_key)
+        # ----------- End ------------
+        
+        # ------ New Conditions ------
+        _, xc = self.get_condition(batch, x, bs, force_c_encode, k, cond_key)
+        prompts = ['good quality video']*b
+        c_text = self.get_learned_conditioning(prompts)
+        c_img = self.get_image_embeds(x)
+        c = torch.cat([c_text, c_img], dim=1)
+        # print('c_text (shape): ', c_text.shape)
+        # print('c_img (shape): ', c_img.shape)
+        # ----------- End -----------
         out = [z, c]
         
         if return_first_stage_outputs:
@@ -677,6 +706,20 @@ class LatentDiffusion(DDPM):
             if isinstance(xc, torch.Tensor) and xc.dim() == 4:
                 xc = rearrange(xc, '(b t) c h w -> b c t h w', b=b, t=t)
             out.append(xc)
+
+        if False:
+            print('---- Get Input Shapes ----')
+            print('\nx_ori: ', x_ori.shape)
+            print('\nz: ', z.shape)
+            print(f"\nc: {c}")
+            # print(f"\nc: {c} {'batch: '+c.shape if c.shape else ''}")
+            print('\nx: ', x.shape)
+            xrec = self.decode_first_stage(z)
+            print('\nxrec: ', xrec.shape)
+            if isinstance(xc, torch.Tensor) and xc.dim() == 4:
+                    xc = rearrange(xc, '(b t) c h w -> b c t h w', b=b, t=t)
+                    print(f"\nxc: {xc}")
+                    # print(f"\nxc: {xc} {'batch: '+xc.shape if xc.shape else ''}")
         
         return out
     
@@ -1248,6 +1291,55 @@ class LatentDiffusion(DDPM):
         x = x * 255
         x = x.int()
         return x
+
+
+# ------------- New Lines -------------
+    
+# class LatentVisualDiffusion(LatentDiffusion):
+#     def __init__(self, cond_img_config, finegrained=False, random_cond=False, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         self.random_cond = random_cond
+#         self.instantiate_img_embedder(cond_img_config, freeze=True)
+#         num_tokens = 16 if finegrained else 4
+#         self.image_proj_model = self.init_projector(use_finegrained=finegrained, num_tokens=num_tokens, input_dim=1024,\
+#                                             cross_attention_dim=1024, dim=1280)    
+
+    def instantiate_img_embedder(self, config, freeze=True):
+        embedder = instantiate_from_config(config)
+        if freeze:
+            self.embedder = embedder.eval()
+            self.embedder.train = disabled_train
+            for param in self.embedder.parameters():
+                param.requires_grad = False
+
+    def init_projector(self, use_finegrained, num_tokens, input_dim, cross_attention_dim, dim):
+        if not use_finegrained:
+            image_proj_model = ImageProjModel(clip_extra_context_tokens=num_tokens, cross_attention_dim=cross_attention_dim,
+                clip_embeddings_dim=input_dim
+            )
+        else:
+            image_proj_model = Resampler(dim=input_dim, depth=4, dim_head=64, heads=12, num_queries=num_tokens,
+                embedding_dim=dim, output_dim=cross_attention_dim, ff_mult=4
+            )
+        return image_proj_model
+
+    ## Never delete this func: it is used in log_images() and inference stage
+    def get_image_embeds(self, batch_imgs):
+        ## img: b c h w
+        batch_imgs = batch_imgs[:, :, 0, :, :]
+        img_token = self.embedder(batch_imgs)
+        img_emb = self.image_proj_model(img_token)
+        # print('batch_imgs shape: ', batch_imgs.shape)
+        # print('img_token shape: ', img_token.shape)
+        # print('imb_emb shape: ', img_emb.shape)
+        return img_emb
+
+    def get_text_embeds(self, prompts):
+        text_emb = self.get_learned_conditioning(prompts)
+        return text_emb
+
+# ---------- End of New Lines ------------
+
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):

@@ -288,13 +288,13 @@ class SetupCallback_low(Callback):
             if "callbacks" in self.lightning_config:
                 if 'metrics_over_trainsteps_checkpoint' in self.lightning_config['callbacks']:
                     os.makedirs(os.path.join(self.ckptdir, 'trainstep_checkpoints'), exist_ok=True)
-            print("Project config")
-            print(OmegaConf.to_yaml(self.config))
+            # print("Project config")
+            # print(OmegaConf.to_yaml(self.config))
             OmegaConf.save(self.config,
                            os.path.join(self.cfgdir, "{}-project.yaml".format(self.now)))
 
-            print("Lightning config")
-            print(OmegaConf.to_yaml(self.lightning_config))
+            # print("Lightning config")
+            # print(OmegaConf.to_yaml(self.lightning_config))
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
                            os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
 
@@ -336,12 +336,12 @@ class SetupCallback_high(Callback):
             if "callbacks" in self.lightning_config:
                 if 'metrics_over_trainsteps_checkpoint' in self.lightning_config['callbacks']:
                     os.makedirs(os.path.join(self.ckptdir, 'trainstep_checkpoints'), exist_ok=True)
-            print("Project config")
-            print(OmegaConf.to_yaml(self.config))
+            # print("Project config")
+            # print(OmegaConf.to_yaml(self.config))
             OmegaConf.save(self.config,
                            os.path.join(self.cfgdir, "{}-project.yaml".format(self.now)))
 
-            print("Lightning config")
-            print(OmegaConf.to_yaml(self.lightning_config))
+            # print("Lightning config")
+            # print(OmegaConf.to_yaml(self.lightning_config))
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
                            os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
